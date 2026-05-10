@@ -1,4 +1,4 @@
-# Uber MCP Server <img src="assets/logo.svg" align="right" width="102"/>
+# Uber MCP Server <img src="assets/logo.png" align="right" width="102"/>
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Node.js](https://img.shields.io/badge/node-%E2%89%A520-brightgreen.svg)](https://nodejs.org/)
