@@ -11,11 +11,14 @@
 import { EventEmitter } from "events";
 import type { Browser, BrowserContext, CDPSession, Page, Cookie } from "playwright";
 import { chromium as chromiumExtra } from "playwright-extra";
-import StealthPlugin from "puppeteer-extra-plugin-stealth";
 
 import type { UberCookie, UberCredentials } from "./store.js";
 
-chromiumExtra.use(StealthPlugin());
+// puppeteer-extra-plugin-stealth is NOT registered here: its evasions break
+// Uber's InAuth device-fingerprinting probe (it injects inline positioning
+// code that gets rejected by auth.uber.com's CSP when stealth is active),
+// leaving raw fingerprint-detector markup (font-test strings, "word word…"
+// filler) visible on top of the real login form instead of hidden off-screen.
 
 const UBER_USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36";
