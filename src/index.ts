@@ -19,6 +19,7 @@ import {
 import axios, { type AxiosError } from "axios";
 
 import type { UberCookie, UberCredentials } from "./http/store.js";
+import { ValidationError, encodePathSegment, redact, validateToolArgs } from "./security.js";
 
 /* ---------------------------------- types --------------------------------- */
 
@@ -211,7 +212,7 @@ function buildPath(template: string, args: Record<string, unknown>): string {
       const key = m.slice(1, -1);
       const val = args[key];
       if (val !== undefined && val !== null) {
-        path = path.replace(m, String(val));
+        path = path.replace(m, encodePathSegment(val));
       }
     }
   }
@@ -1673,6 +1674,31 @@ export async function executeTool(
 }
 
 /**
+ * Entry point for untrusted (client-supplied) arguments: validates them against
+ * the tool's schema before dispatching. Internal composite steps call
+ * executeTool directly with trusted, server-built arguments.
+ */
+export async function executeToolValidated(
+  def: McpToolDefinition,
+  rawArgs: unknown,
+  tokenProvider: TokenProvider = defaultProvider
+): Promise<CallToolResult> {
+  let args: Record<string, unknown>;
+  try {
+    args = validateToolArgs(def.inputSchema, rawArgs);
+  } catch (err) {
+    if (err instanceof ValidationError) {
+      return {
+        content: [{ type: "text", text: `Invalid arguments: ${err.message}` }],
+        isError: true,
+      };
+    }
+    throw err;
+  }
+  return executeTool(def, args, tokenProvider);
+}
+
+/**
  * Direct (non-composite) HTTP dispatch. Composite handlers call this to
  * avoid recursing through their own wrapper.
  */
@@ -1758,13 +1784,13 @@ async function executeToolDirect(
     }
 
     console.error(
-      `[uber-mcp] FAIL tool=${def.name} ${def.method.toUpperCase()} ${url} status=${status ?? "network"} msg=${JSON.stringify(msg).slice(0, 300)}`
+      `[uber-mcp] FAIL tool=${def.name} ${def.method.toUpperCase()} ${url} status=${status ?? "network"} msg=${redact(msg, 300)}`
     );
     return {
       content: [
         {
           type: "text",
-          text: `API Error (${status ?? "network"}): ${typeof msg === "string" ? msg : JSON.stringify(msg)}`,
+          text: `API Error (${status ?? "network"}): ${redact(msg)}`,
         },
       ],
       isError: true,
@@ -1799,9 +1825,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
       isError: true,
     };
   }
-  const safeArgs = (args as Record<string, unknown>) || {};
   console.error(`[uber-mcp] tools/call name=${name}`);
-  return executeTool(def, safeArgs);
+  return executeToolValidated(def, args ?? {});
 });
 
 export async function main(): Promise<void> {
@@ -1821,7 +1846,7 @@ const isEntrypoint = (() => {
 
 if (isEntrypoint) {
   main().catch((err) => {
-    console.error(err);
+    console.error(redact(err instanceof Error ? err.message : err));
     process.exit(1);
   });
 }

@@ -12,6 +12,7 @@ import type { Socket } from "net";
 import { WebSocketServer, type WebSocket } from "ws";
 
 import type { UberOAuthProvider } from "./provider.js";
+import { redact } from "../security.js";
 import {
   RemoteBrowserSession,
   type DoneEvent,
@@ -68,8 +69,8 @@ export function createRemoteBrowserRouter(deps: RemoteBrowserRouterDeps): Router
       provider.browserSessions.delete(sessionId);
       await session.close().catch(() => {});
       const msg = err instanceof Error ? err.message : String(err);
-      console.error(`[remote-browser-router] failed to start session: ${msg}`);
-      res.status(500).type("html").send(errorPage(`Failed to start browser: ${msg}`));
+      console.error(`[remote-browser-router] failed to start session: ${redact(msg)}`);
+      res.status(500).type("html").send(errorPage("Failed to start browser. Please try again later."));
       return;
     }
 
@@ -83,6 +84,13 @@ export function createRemoteBrowserRouter(deps: RemoteBrowserRouterDeps): Router
     const url = new URL(req.url ?? "", "http://x");
     const m = url.pathname.match(/^\/login\/ws\/([\w-]+)$/);
     if (!m) return;
+    // Block cross-site WebSocket hijacking: browsers always send Origin.
+    const origin = req.headers.origin;
+    if (origin !== new URL(publicUrl).origin) {
+      socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+      socket.destroy();
+      return;
+    }
     const sessionId = m[1];
     const handle = provider.browserSessions.get(sessionId);
     if (!handle) {

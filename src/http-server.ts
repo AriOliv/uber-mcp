@@ -18,7 +18,7 @@ import {
 import { mcpAuthRouter } from "@modelcontextprotocol/sdk/server/auth/router.js";
 import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
 
-import { toolDefinitions, executeTool } from "./index.js";
+import { toolDefinitions, executeToolValidated } from "./index.js";
 import { UberOAuthProvider } from "./http/provider.js";
 import { createLoginRouter } from "./http/login-router.js";
 import { createRemoteBrowserRouter } from "./http/remote-browser-router.js";
@@ -55,8 +55,34 @@ const toolMap = new Map(toolDefinitions.map((t) => [t.name, t]));
 
 const app = express();
 
-app.use(express.json({ limit: "4mb" }));
-app.use(express.urlencoded({ extended: false }));
+app.disable("x-powered-by");
+// Do not trust X-Forwarded-* unless explicitly configured (proxy-addr spoofing).
+if (process.env.TRUST_PROXY) app.set("trust proxy", process.env.TRUST_PROXY);
+
+// Security headers. The remote-browser login page streams a canvas over a
+// same-origin WebSocket and uses inline scripts/styles, so CSP is scoped to that.
+app.use((req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
+  res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
+  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  if (PUBLIC_URL.startsWith("https://")) {
+    res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+  }
+  if (req.path.startsWith("/login")) {
+    res.setHeader(
+      "Content-Security-Policy",
+      "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' ws: wss:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+    );
+  }
+  if (req.path !== "/healthz") res.setHeader("Cache-Control", "no-store");
+  next();
+});
+
+app.use(express.json({ limit: "1mb" }));
+app.use(express.urlencoded({ extended: false, limit: "100kb" }));
 
 app.use((req, _res, next) => {
   const sessionId = req.header("mcp-session-id");
@@ -96,19 +122,18 @@ app.use(
 );
 
 app.get("/healthz", (_req, res) => {
-  res.json({
-    ok: true,
-    tools: toolDefinitions.length,
-    publicUrl: PUBLIC_URL,
-    browserSessions: provider.browserSessions.size(),
-    maxBrowserSessions: MAX_BROWSER_SESSIONS,
-    activeUsers: provider.userTokens.allIds().length,
-  });
+  // Unauthenticated: expose liveness only, no counts/URLs.
+  res.json({ ok: true });
 });
 
 // Dev-only debug endpoint: lists user IDs (no cookies).
 if (process.env.NODE_ENV !== "production") {
-  app.get("/debug/users", (_req, res) => {
+  app.get("/debug/users", (req, res) => {
+    const ip = req.socket.remoteAddress ?? "";
+    if (!["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(ip)) {
+      res.status(404).end();
+      return;
+    }
     const ids = provider.userTokens.allIds();
     res.json({
       count: ids.length,
@@ -166,9 +191,8 @@ function makeMcpServer(userSub: string): McpServer {
       };
       return r;
     }
-    const args = (req.params.arguments as Record<string, unknown>) ?? {};
     console.log(`[mcp] tools/call name=${req.params.name}`);
-    return executeTool(def, args, sessionProvider);
+    return executeToolValidated(def, req.params.arguments ?? {}, sessionProvider);
   });
 
   return mcp;
