@@ -122,7 +122,13 @@ export class UberOAuthProvider implements OAuthServerProvider {
       const { payload } = await jwtVerify(token, this.cfg.jwtSecret, {
         issuer: this.cfg.issuerUrl.href,
         audience: this.cfg.resourceUrl.href,
+        algorithms: ["HS256"],
+        typ: "at+jwt",
+        requiredClaims: ["sub", "exp"],
       });
+      if (typeof payload.sub !== "string" || !payload.sub) {
+        throw new InvalidTokenError("missing sub");
+      }
       const scopes =
         typeof payload.scope === "string" ? payload.scope.split(" ").filter(Boolean) : [];
       return {
